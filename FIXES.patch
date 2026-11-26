@@ -1,0 +1,346 @@
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/AdManagerCreatorImpl.kt /workspace/GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/AdManagerCreatorImpl.kt
+--- GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/AdManagerCreatorImpl.kt	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/AdManagerCreatorImpl.kt	2026-11-21 06:10:04.745308047 +0000
+@@ -23,12 +23,12 @@
+ open class AdManagerCreatorImpl : IAdManagerCreator.Stub() {
+     override fun newAdManager(context: IObjectWrapper?, adSize: AdSizeParcel?, adUnitId: String?, adapterCreator: IAdapterCreator?, clientVersion: Int): IAdManager {
+         Log.d(TAG, "newAdManager: adUnitId=$adUnitId clientVersion=$clientVersion")
+-        return LegacyAdManager(ObjectWrapper.unwrap(context) as? Context)
++        return LegacyAdManager(ObjectWrapper.unwrap(context) as? Context, adSize)
+     }
+ 
+     override fun newAdManagerByType(context: IObjectWrapper?, adSize: AdSizeParcel?, adUnitId: String?, adapterCreator: IAdapterCreator?, clientVersion: Int, type: Int): IAdManager {
+         Log.d(TAG, "newAdManagerByType: adUnitId=$adUnitId clientVersion=$clientVersion type=$type")
+-        return LegacyAdManager(ObjectWrapper.unwrap(context) as? Context)
++        return LegacyAdManager(ObjectWrapper.unwrap(context) as? Context, adSize)
+     }
+ 
+     override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean =
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/LegacyAdManager.kt /workspace/GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/LegacyAdManager.kt
+--- GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/LegacyAdManager.kt	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-ads-api/core/src/main/kotlin/com/google/android/gms/ads/LegacyAdManager.kt	2026-11-21 06:10:01.673307900 +0000
+@@ -29,9 +29,20 @@
+  * [getView] returns an empty container, [loadAd] reports "no fill", and the listeners/getters are
+  * accepted but inert.
+  */
+-internal class LegacyAdManager(private val context: Context?) : IAdManager.Stub() {
++internal class LegacyAdManager(private val context: Context?, adSize: AdSizeParcel?) : IAdManager.Stub() {
+     private val adView: FrameLayout? by lazy { context?.let { FrameLayout(it) } }
+ 
++    // Older AdMob SDKs call getAdSize() and dereference the result immediately. Never return
++    // null here: use the size supplied by the caller, or a standard 320x50 banner as fallback.
++    private var adSizeParcel: AdSizeParcel = adSize ?: AdSizeParcel().apply {
++        formatString = "320x50_mb"
++        width = 320
++        height = 50
++        widthPixels = 320
++        heightPixels = 50
++        isParcelStateValid = true
++    }
++
+     override fun getView(): IObjectWrapper = ObjectWrapper.wrap(adView)
+     override fun destroy() = Unit
+     override fun loadAd(request: AdRequestParcel?): Boolean {
+@@ -42,8 +53,10 @@
+     override fun resume() = Unit
+     override fun setAdListener(listener: IAdListener?) = Unit
+     override fun setAppEventListener(listener: IAppEventListener?) = Unit
+-    override fun getAdSize(): AdSizeParcel? = null
+-    override fun setAdSize(adSize: AdSizeParcel?) = Unit
++    override fun getAdSize(): AdSizeParcel = adSizeParcel
++    override fun setAdSize(adSize: AdSizeParcel?) {
++        adSize?.let { adSizeParcel = it }
++    }
+     override fun setAdClickListener(listener: IAdClickListener?) = Unit
+     override fun setManualImpressionFlag(flag: Int) = Unit
+     override fun getVideoController(): IVideoController? = null
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-cast/core/src/main/java/org/microg/gms/cast/CastDeviceControllerImpl.java /workspace/GmsCore-master/play-services-cast/core/src/main/java/org/microg/gms/cast/CastDeviceControllerImpl.java
+--- GmsCore-master/play-services-cast/core/src/main/java/org/microg/gms/cast/CastDeviceControllerImpl.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-cast/core/src/main/java/org/microg/gms/cast/CastDeviceControllerImpl.java	2026-11-21 06:11:45.773312864 +0000
+@@ -109,8 +109,10 @@
+         Log.d(TAG, "unimplemented: ApplicationMetadata.senderAppLaunchUri");
+         metadata.images = new ArrayList<WebImage>();
+         metadata.namespaces = new ArrayList<String>();
+-        for(Namespace namespace : app.namespaces) {
+-            metadata.namespaces.add(namespace.name);
++        if (app.namespaces != null) {
++            for (Namespace namespace : app.namespaces) {
++                metadata.namespaces.add(namespace.name);
++            }
+         }
+         metadata.senderAppIdentifier = this.context.getPackageName();
+         return metadata;
+@@ -213,6 +215,11 @@
+             this.onApplicationConnectionFailure(CommonStatusCodes.NETWORK_ERROR);
+             return;
+         }
++        if (app == null) {
++            Log.w(TAG, "Launching cast application returned no application");
++            this.onApplicationConnectionFailure(CommonStatusCodes.INTERNAL_ERROR);
++            return;
++        }
+         this.sessionId = app.sessionId;
+ 
+         ApplicationMetadata metadata = this.createMetadataFromApplication(app);
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionImpl.java /workspace/GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionImpl.java
+--- GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionImpl.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionImpl.java	2026-11-21 06:10:43.609309900 +0000
+@@ -66,9 +66,14 @@
+     public void onApplicationConnectionSuccess(ApplicationMetadata applicationMetadata, String applicationStatus, String sessionId, boolean wasLaunched) {
+         this.mIsConnecting = false;
+         this.mIsConnected = true;
+-        this.castContext.getSessionManagerImpl().onSessionStarted(this, sessionId);
++        CastContextImpl castContext = this.castContext;
++        if (castContext == null) {
++            Log.w(TAG, "onApplicationConnectionSuccess called without a cast context");
++            return;
++        }
++        castContext.getSessionManagerImpl().onSessionStarted(this, sessionId);
+         try {
+-            this.castContext.getRouter().selectRouteById(this.getRouteId());
++            castContext.getRouter().selectRouteById(this.getRouteId());
+         } catch (RemoteException ex) {
+             Log.e(TAG, "Error calling selectRouteById: " + ex.getMessage());
+         }
+@@ -78,12 +83,19 @@
+         this.mIsConnecting = false;
+         this.mIsConnected = false;
+         this.routeId = null;
++        // Keep a local reference: the fields are cleared below, but they are still needed to
++        // notify the session manager and to fall back to the default route.
++        CastContextImpl castContext = this.castContext;
+         this.castContext = null;
+         this.castDevice = null;
+         this.routeInfoExtra = null;
+-        this.castContext.getSessionManagerImpl().onSessionStartFailed(this, statusCode);
++        if (castContext == null) {
++            Log.w(TAG, "onApplicationConnectionFailure called without a cast context");
++            return;
++        }
++        castContext.getSessionManagerImpl().onSessionStartFailed(this, statusCode);
+         try {
+-            this.castContext.getRouter().selectDefaultRoute();
++            castContext.getRouter().selectDefaultRoute();
+         } catch (RemoteException ex) {
+             Log.e(TAG, "Error calling selectDefaultRoute: " + ex.getMessage());
+         }
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionManagerImpl.java /workspace/GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionManagerImpl.java
+--- GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionManagerImpl.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-cast-framework/core/src/main/java/com/google/android/gms/cast/framework/internal/SessionManagerImpl.java	2026-11-21 06:11:05.517310944 +0000
+@@ -31,20 +31,20 @@
+ import com.google.android.gms.dynamic.ObjectWrapper;
+ 
+ import java.util.Set;
+-import java.util.HashSet;
++import java.util.concurrent.CopyOnWriteArraySet;
+ 
+ import java.util.Map;
+-import java.util.HashMap;
++import java.util.concurrent.ConcurrentHashMap;
+ 
+ public class SessionManagerImpl extends ISessionManager.Stub {
+     private static final String TAG = SessionManagerImpl.class.getSimpleName();
+ 
+     private CastContextImpl castContext;
+ 
+-    private Set<ISessionManagerListener> sessionManagerListeners = new HashSet<ISessionManagerListener>();
+-    private Set<ICastStateListener> castStateListeners = new HashSet<ICastStateListener>();
++    private Set<ISessionManagerListener> sessionManagerListeners = new CopyOnWriteArraySet<ISessionManagerListener>();
++    private Set<ICastStateListener> castStateListeners = new CopyOnWriteArraySet<ICastStateListener>();
+ 
+-    private Map<String, SessionImpl> routeSessions = new HashMap<String, SessionImpl>();
++    private Map<String, SessionImpl> routeSessions = new ConcurrentHashMap<String, SessionImpl>();
+ 
+     private SessionImpl currentSession;
+ 
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-core/src/main/java/org/microg/gms/auth/loginservice/AccountAuthenticator.java /workspace/GmsCore-master/play-services-core/src/main/java/org/microg/gms/auth/loginservice/AccountAuthenticator.java
+--- GmsCore-master/play-services-core/src/main/java/org/microg/gms/auth/loginservice/AccountAuthenticator.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-core/src/main/java/org/microg/gms/auth/loginservice/AccountAuthenticator.java	2026-11-21 06:12:23.025314640 +0000
+@@ -98,7 +98,9 @@
+     public boolean isPackageOverrideAllowed(Account account, String requestingPackage, String overridePackage, CertData overrideCertificate) {
+         // Always allow for self package
+         if (requestingPackage.equals(context.getPackageName())) return true;
+-        String requestingDigestString = PackageManagerUtilsKt.toHexString(PackageManagerUtilsKt.digest(PackageManagerUtilsKt.getCertificates(context.getPackageManager(), requestingPackage).get(0), "SHA-256"), "");
++        List<CertData> requestingCertificates = PackageManagerUtilsKt.getCertificates(context.getPackageManager(), requestingPackage);
++        if (requestingCertificates.isEmpty()) return false;
++        String requestingDigestString = PackageManagerUtilsKt.toHexString(PackageManagerUtilsKt.digest(requestingCertificates.get(0), "SHA-256"), "");
+         String overrideCertificateDigestString = PackageManagerUtilsKt.toHexString(PackageManagerUtilsKt.digest(overrideCertificate, "SHA-256"), "");
+         String overrideUserDataKey = "override." + requestingPackage + ":" + requestingDigestString + ":" + overridePackage + ":" + overrideCertificateDigestString;
+         String hasOverride = AccountManager.get(context).getUserData(account, overrideUserDataKey);
+@@ -124,7 +126,13 @@
+             if (overrideCertificateBytes != null) {
+                 overrideCert = new CertData(overrideCertificateBytes);
+             } else {
+-                overrideCert = PackageManagerUtilsKt.getCertificates(context.getPackageManager(), app).get(0);
++                List<CertData> certificates = PackageManagerUtilsKt.getCertificates(context.getPackageManager(), app);
++                if (certificates.isEmpty()) {
++                    Bundle result = new Bundle();
++                    result.putInt(KEY_ERROR_CODE, ERROR_CODE_BAD_REQUEST);
++                    return result;
++                }
++                overrideCert = certificates.get(0);
+             }
+             if (isPackageOverrideAllowed(account, app, overridePackage, overrideCert)) {
+                 authManager = new AuthManager(context, account.name, overridePackage, authTokenType);
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-core/src/main/kotlin/com/google/android/gms/locationsharingreporter/service/LocationSharingReporterExtensions.kt /workspace/GmsCore-master/play-services-core/src/main/kotlin/com/google/android/gms/locationsharingreporter/service/LocationSharingReporterExtensions.kt
+--- GmsCore-master/play-services-core/src/main/kotlin/com/google/android/gms/locationsharingreporter/service/LocationSharingReporterExtensions.kt	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-core/src/main/kotlin/com/google/android/gms/locationsharingreporter/service/LocationSharingReporterExtensions.kt	2026-11-21 06:10:25.265309025 +0000
+@@ -237,7 +237,7 @@
+     }
+ 
+     val issuesByAccount = mutableMapOf<String, Set<Int>>()
+-    val account = AccountManager.get(context).getAccountsByType(AuthConstants.DEFAULT_ACCOUNT_TYPE)[0]
++    val account = AccountManager.get(context).getAccountsByType(AuthConstants.DEFAULT_ACCOUNT_TYPE).firstOrNull()
+     if (account != null) {
+         if (reportingRequestStore.accountLocationSharingMap[account.name] == null) {
+             issuesByAccount[account.name] = HashSet(13)
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/ActivityRecognitionResult.java /workspace/GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/ActivityRecognitionResult.java
+--- GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/ActivityRecognitionResult.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/ActivityRecognitionResult.java	2026-11-21 06:11:14.561311376 +0000
+@@ -17,6 +17,7 @@
+ import org.microg.gms.common.PublicApi;
+ import org.microg.safeparcel.AutoSafeParcelable;
+ 
++import java.util.ArrayList;
+ import java.util.Collections;
+ import java.util.List;
+ 
+@@ -62,7 +63,7 @@
+      * @param elapsedRealtimeMillis milliseconds since boot
+      */
+     public ActivityRecognitionResult(List<DetectedActivity> probableActivities, long time, long elapsedRealtimeMillis) {
+-        this.probableActivities = probableActivities;
++        this.probableActivities = probableActivities != null ? probableActivities : new ArrayList<DetectedActivity>();
+         this.time = time;
+         this.elapsedRealtimeMillis = elapsedRealtimeMillis;
+     }
+@@ -109,6 +110,7 @@
+      * Returns the confidence of the given activity type.
+      */
+     public int getActivityConfidence(int activityType) {
++        if (probableActivities == null) return 0;
+         for (DetectedActivity activity : probableActivities) {
+             if (activity.getType() == activityType)
+                 return activity.getConfidence();
+@@ -128,7 +130,7 @@
+      * Returns the most probable activity of the user.
+      */
+     public DetectedActivity getMostProbableActivity() {
+-        return probableActivities.get(0);
++        return probableActivities != null && !probableActivities.isEmpty() ? probableActivities.get(0) : null;
+     }
+ 
+     /**
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/LocationResult.java /workspace/GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/LocationResult.java
+--- GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/LocationResult.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-location/src/main/java/com/google/android/gms/location/LocationResult.java	2026-11-21 06:12:03.741313721 +0000
+@@ -33,14 +33,20 @@
+     }
+ 
+     private LocationResult(List<Location> locations) {
+-        this.locations = locations;
++        this.locations = locations != null ? locations : new ArrayList<Location>();
+     }
+ 
+     /**
+      * Creates a {@link LocationResult} for the given locations.
+      */
+     public static LocationResult create(List<Location> locations) {
+-        return new LocationResult(locations);
++        List<Location> nonNullLocations = new ArrayList<Location>();
++        if (locations != null) {
++            for (Location location : locations) {
++                if (location != null) nonNullLocations.add(location);
++            }
++        }
++        return new LocationResult(nonNullLocations);
+     }
+ 
+     /**
+@@ -73,8 +79,11 @@
+      * Returns the most recent location available in this result, or null if no locations are available.
+      */
+     public Location getLastLocation() {
+-        if (locations.isEmpty()) return null;
+-        return locations.get(locations.size() - 1);
++        for (int i = locations.size() - 1; i >= 0; i--) {
++            Location location = locations.get(i);
++            if (location != null) return location;
++        }
++        return null;
+     }
+ 
+     /**
+@@ -101,7 +110,13 @@
+         LocationResult that = (LocationResult) obj;
+         if (that.locations.size() != locations.size()) return false;
+         for (int i = 0; i < that.locations.size(); i++) {
+-            if (that.locations.get(i).getTime() != locations.get(i).getTime()) return false;
++            Location thatLocation = that.locations.get(i);
++            Location thisLocation = locations.get(i);
++            if (thatLocation == null || thisLocation == null) {
++                if (thatLocation != thisLocation) return false;
++            } else if (thatLocation.getTime() != thisLocation.getTime()) {
++                return false;
++            }
+         }
+ 
+         return true;
+@@ -111,6 +126,10 @@
+     public int hashCode() {
+         int result = 17;
+         for (Location location : locations) {
++            if (location == null) {
++                result = (result * 31);
++                continue;
++            }
+             long time = location.getTime();
+             result = (result * 31) + ((int) (time ^ (time >>> 32)));
+         }
+diff -ruN '--exclude=FIXES.md' GmsCore-master/play-services-location/src/main/java/org/microg/gms/location/LocationClientImpl.java /workspace/GmsCore-master/play-services-location/src/main/java/org/microg/gms/location/LocationClientImpl.java
+--- GmsCore-master/play-services-location/src/main/java/org/microg/gms/location/LocationClientImpl.java	2026-11-12 11:53:24.000000000 +0000
++++ /workspace/GmsCore-master/play-services-location/src/main/java/org/microg/gms/location/LocationClientImpl.java	2026-11-21 06:11:53.077313212 +0000
+@@ -97,6 +97,7 @@
+             listenerMap.put(listener, new ILocationListener.Stub() {
+                 @Override
+                 public void onLocationChanged(Location location) throws RemoteException {
++                    if (location == null) return;
+                     listener.onLocationChanged(location);
+                 }
+ 
+@@ -124,6 +125,7 @@
+             listenerMap.put(listener, new ILocationListener.Stub() {
+                 @Override
+                 public void onLocationChanged(Location location) throws RemoteException {
++                    if (location == null) return;
+                     executor.execute(() -> listener.onLocationChanged(location));
+                 }
+ 
+@@ -146,6 +148,7 @@
+             callbackMap.put(callback, new ILocationListener.Stub() {
+                 @Override
+                 public void onLocationChanged(Location location) throws RemoteException {
++                    if (location == null) return;
+                     executor.execute(() -> callback.onLocationResult(LocationResult.create(Collections.singletonList(location))));
+                 }
+ 
+@@ -159,11 +162,17 @@
+     }
+ 
+     public void removeLocationUpdates(LocationListener listener) throws RemoteException {
+-        getServiceInterface().removeLocationUpdatesWithListener(listenerMap.get(listener));
++        ILocationListener registeredListener = listenerMap.remove(listener);
++        if (registeredListener != null) {
++            getServiceInterface().removeLocationUpdatesWithListener(registeredListener);
++        }
+     }
+ 
+     public void removeLocationUpdates(LocationCallback callback) throws RemoteException {
+-        getServiceInterface().removeLocationUpdatesWithListener(callbackMap.get(callback));
++        ILocationListener registeredCallback = callbackMap.remove(callback);
++        if (registeredCallback != null) {
++            getServiceInterface().removeLocationUpdatesWithListener(registeredCallback);
++        }
+     }
+ 
+     public void removeLocationUpdates(PendingIntent pendingIntent) throws RemoteException {
